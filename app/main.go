@@ -8,20 +8,45 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
-
-// Ensures gofmt doesn't remove the "net" and "os" imports in stage 1 (feel free to remove this!)
-var _ = net.Listen
-var _ = os.Exit
 
 type resp struct {
 	cmd  string
 	args []string
 }
 
+type store struct {
+	mu   sync.RWMutex
+	data map[string]string
+}
+
+func newStore() *store {
+	return &store{
+		data: make(map[string]string),
+	}
+}
+
+func (s *store) set(key, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.data[key] = value
+}
+
+func (s *store) get(key string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	value, ok := s.data[key]
+	return value, ok
+}
+
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
+
+	s := newStore()
 
 	// Uncomment this block to pass the first stage
 
@@ -38,11 +63,11 @@ func main() {
 			fmt.Println("Error accepting connection: ", err.Error())
 			os.Exit(1)
 		}
-		go handlerConn(con)
+		go s.handlerConn(con)
 	}
 }
 
-func handlerConn(conn net.Conn) {
+func (s *store) handlerConn(conn net.Conn) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 
@@ -63,6 +88,16 @@ func handlerConn(conn net.Conn) {
 		case "ECHO":
 			if len(r.args) > 0 {
 				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(r.args[0]), r.args[0])
+			}
+		case "SET":
+			s.set(r.args[0], r.args[1])
+			conn.Write([]byte("+OK\r\n"))
+		case "GET":
+			if value, ok := s.get(r.args[0]); ok {
+				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(value), value)
+			} else {
+				// null bulk string
+				conn.Write([]byte("$-1\r\n"))
 			}
 		default:
 			conn.Write([]byte("-ERR unknown command\r\n"))
