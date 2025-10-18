@@ -17,31 +17,32 @@ type resp struct {
 	args []string
 }
 
-type valueS struct {
-	value    string
+type value struct {
+	valueS   string
+	valueL   []string
 	expireAt *time.Time
 }
 
 type store struct {
 	mu   sync.RWMutex
-	data map[string]*valueS
+	data map[string]*value
 }
 
 func newStore() *store {
 	return &store{
-		data: make(map[string]*valueS),
+		data: make(map[string]*value),
 	}
 }
 
-func (s *store) set(key, value string, ops ...string) error {
+func (s *store) set(k, v string, ops ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	fmt.Printf("ops %v\n", ops)
 
 	if len(ops) == 0 {
-		s.data[key] = &valueS{
-			value: value,
+		s.data[k] = &value{
+			valueS: v,
 		}
 		return nil
 	}
@@ -56,8 +57,8 @@ func (s *store) set(key, value string, ops ...string) error {
 			return err
 		}
 		expiry := time.Now().Add(time.Duration(durationS) * time.Second)
-		s.data[key] = &valueS{
-			value:    value,
+		s.data[k] = &value{
+			valueS:   v,
 			expireAt: &expiry,
 		}
 		return nil
@@ -70,8 +71,8 @@ func (s *store) set(key, value string, ops ...string) error {
 			return err
 		}
 		expiry := time.Now().Add(time.Duration(durationMS) * time.Millisecond)
-		s.data[key] = &valueS{
-			value:    value,
+		s.data[k] = &value{
+			valueS:   v,
 			expireAt: &expiry,
 		}
 		return nil
@@ -93,14 +94,31 @@ func (s *store) get(key string) (string, bool) {
 	fmt.Printf("Retrieve data %v", v)
 
 	if v.expireAt == nil {
-		return v.value, true
+		return v.valueS, true
 	}
 
 	now := time.Now()
 	if v.expireAt.After(now) {
-		return v.value, true
+		return v.valueS, true
 	} else {
+		delete(s.data, key)
 		return "", false
+	}
+}
+
+func (s *store) setList(k string, v ...string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if kV, ok := s.data[k]; ok {
+		kV.valueL = append(kV.valueL, v...)
+		s.data[k] = kV
+		return len(kV.valueL)
+	} else {
+		s.data[k] = &value{
+			valueL: v,
+		}
+		return len(v)
 	}
 }
 
@@ -173,6 +191,9 @@ func (s *store) handlerConn(conn net.Conn) {
 				// null bulk string
 				conn.Write([]byte("$-1\r\n"))
 			}
+		case "RPUSH":
+			l := s.setList(r.args[0], r.args[1:]...)
+			fmt.Fprintf(conn, ":%d\r\n", l)
 		default:
 			conn.Write([]byte("-ERR unknown command\r\n"))
 		}
